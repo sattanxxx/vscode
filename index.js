@@ -1,5 +1,5 @@
 const { Client, GatewayIntentBits } = require("discord.js");
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, EndBehaviorType } = require("@discordjs/voice");
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, EndBehaviorType, VoiceConnectionStatus } = require("@discordjs/voice");
 const prism = require("prism-media");
 const { Readable } = require("stream");
 const http = require("http");
@@ -67,6 +67,7 @@ function mixPCMStreams(streams) {
 // VC間音声転送
 // -----------------------------
 function bridgeMultipleUsers(sourceConn, targetConn, members, label) {
+  if (!sourceConn || !targetConn) return;
   const pcmStreams = [];
   for (const member of members.values()) {
     if (!member || !member.user || member.user.bot) continue;
@@ -119,11 +120,23 @@ client.on("messageCreate", async (message) => {
         guildId: guild.id,
         adapterCreator: guild.voiceAdapterCreator
       });
-
       agentConn = joinVoiceChannel({
         channelId: agentVC.id,
         guildId: guild.id,
         adapterCreator: guild.voiceAdapterCreator
+      });
+
+      // 切断時に二重 destroy されないように制御
+      spymasterConn.on(VoiceConnectionStatus.Disconnected, () => {
+        if (!gameStarted) return;
+        console.log("⚠️ スパイマスターVCから切断されました。再接続を試みます...");
+        spymasterConn.rejoin();
+      });
+
+      agentConn.on(VoiceConnectionStatus.Disconnected, () => {
+        if (!gameStarted) return;
+        console.log("⚠️ 諜報員VCから切断されました。再接続を試みます...");
+        agentConn.rejoin();
       });
 
       gameStarted = true;
@@ -150,7 +163,6 @@ client.on("messageCreate", async (message) => {
         message.channel.send("🔵 スパイマスターターン：双方向会話");
         bridgeMultipleUsers(spymasterConn, agentConn, spymasterVC.members, "スパイマスター→諜報員");
         bridgeMultipleUsers(agentConn, spymasterConn, agentVC.members, "諜報員→スパイマスター");
-
       } else if (arg === "agent") {
         message.channel.send("🟢 諜報員ターン：スパイマスターはモニタリングのみ");
         bridgeMultipleUsers(agentConn, spymasterConn, agentVC.members, "諜報員→スパイマスター");
@@ -162,12 +174,15 @@ client.on("messageCreate", async (message) => {
     // /gameend
     // -----------------------------
     if (command === "/gameend") {
-      if (spymasterConn) spymasterConn.destroy();
-      if (agentConn) agentConn.destroy();
-      spymasterConn = null;
-      agentConn = null;
+      if (spymasterConn && spymasterConn.state.status !== "destroyed") {
+        try { spymasterConn.destroy(); } catch(e){ console.error(e); }
+        spymasterConn = null;
+      }
+      if (agentConn && agentConn.state.status !== "destroyed") {
+        try { agentConn.destroy(); } catch(e){ console.error(e); }
+        agentConn = null;
+      }
       gameStarted = false;
-
       message.channel.send("🛑 ゲーム終了！VCから退出しました。");
       return;
     }
