@@ -1,5 +1,5 @@
 const { Client, GatewayIntentBits } = require("discord.js");
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, EndBehaviorType } = require("@discordjs/voice");
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, EndBehaviorType, getVoiceConnection } = require("@discordjs/voice");
 const prism = require("prism-media");
 const http = require("http");
 
@@ -47,27 +47,34 @@ client.on("messageCreate", async (message) => {
   const guild = client.guilds.cache.get(GUILD_ID);
   if (!guild) return;
 
-  const spymasterVC = guild.channels.cache.find(c => c.name === SPYMASTER_VC_NAME);
-  const agentVC = guild.channels.cache.find(c => c.name === AGENT_VC_NAME);
-  if (!spymasterVC || !agentVC) return;
+  // キャッシュではなく全チャンネル取得
+  const channels = await guild.channels.fetch();
+  const spymasterVC = channels.find(c => c.name === SPYMASTER_VC_NAME && c.type === 2);
+  const agentVC = channels.find(c => c.name === AGENT_VC_NAME && c.type === 2);
+
+  if (!spymasterVC) console.log("⚠️ スパイマスターVCが見つかりません");
+  if (!agentVC) console.log("⚠️ 諜報員VCが見つかりません");
 
   // -----------------------------
   // /gamestart コマンド
   // -----------------------------
   if (command === "/gamestart") {
-    if (!spymasterConn) {
+    if (!spymasterConn && spymasterVC) {
       spymasterConn = joinVoiceChannel({
         channelId: spymasterVC.id,
         guildId: guild.id,
         adapterCreator: guild.voiceAdapterCreator
       });
+      console.log("✅ スパイマスターVCに参加しました");
     }
-    if (!agentConn) {
+
+    if (!agentConn && agentVC) {
       agentConn = joinVoiceChannel({
         channelId: agentVC.id,
         guildId: guild.id,
         adapterCreator: guild.voiceAdapterCreator
       });
+      console.log("✅ 諜報員VCに参加しました");
     }
 
     message.channel.send("🎮 ゲーム開始！Botが両方のVCに参加しました。");
@@ -93,10 +100,7 @@ client.on("messageCreate", async (message) => {
         if (member.user.bot) return;
 
         const audioStream = receiver.subscribe(member.id, {
-          end: {
-            behavior: EndBehaviorType.AfterSilence,
-            duration: 100
-          }
+          end: { behavior: EndBehaviorType.AfterSilence, duration: 100 }
         });
 
         const opusDecoder = new prism.opus.Decoder({
@@ -111,6 +115,28 @@ client.on("messageCreate", async (message) => {
         player.play(resource);
       });
     }
+    return;
+  }
+
+  // -----------------------------
+  // /gameend コマンド
+  // -----------------------------
+  if (command === "/gameend") {
+    if (spymasterConn) {
+      spymasterConn.destroy();
+      spymasterConn = null;
+      console.log("✅ スパイマスターVCから退出");
+    }
+
+    if (agentConn) {
+      agentConn.destroy();
+      agentConn = null;
+      console.log("✅ 諜報員VCから退出");
+    }
+
+    bridgeActive = false;
+    message.channel.send("🛑 ゲーム終了！BotはすべてのVCから退出しました。");
+    return;
   }
 });
 
