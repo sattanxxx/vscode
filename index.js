@@ -12,8 +12,8 @@ http.createServer((req, res) => {
 
 const TOKEN = process.env.TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
-const WAITING_VC_NAME = process.env.WAITING_VC_NAME || "待機用VC";
-const MEETING_VC_NAME = process.env.MEETING_VC_NAME || "会議用VC";
+const WAITING_VC_NAME = process.env.WAITING_VC_NAME || "スパイマスターVC";
+const MEETING_VC_NAME = process.env.MEETING_VC_NAME || "諜報員VC";
 
 const client = new Client({
   intents: [
