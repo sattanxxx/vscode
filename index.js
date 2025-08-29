@@ -33,7 +33,6 @@ let monitoringConn = null;
 // 複数ユーザー音声をミキシング
 function mixAudioStreams(members, receiver) {
   const mixedStream = new PassThrough();
-
   members.forEach(member => {
     if (!member || !member.voice.channel || member.user.bot) return;
     try {
@@ -44,7 +43,6 @@ function mixAudioStreams(members, receiver) {
       console.error(`⚠️ 音声取得エラー (${member.user.tag}): ${err.message}`);
     }
   });
-
   return mixedStream;
 }
 
@@ -67,14 +65,18 @@ function canStartGame() {
   return true;
 }
 
+// -----------------------------
 // ターン切替
 async function startSpymasterTurn(meetingVC) {
+  // ゲーム開始時と同じ動作：全員会議VCに集める
   const allPlayers = [spymasters.red, spymasters.blue, ...agents.red, ...agents.blue];
   await moveMembersToVC(allPlayers, meetingVC);
 }
 
 async function startAgentTurn(waitingVC, meetingVC) {
+  // スパイマスターを待機VCに移動
   await moveMembersToVC([spymasters.red, spymasters.blue], waitingVC);
+  // 諜報員だけ会議VCに集める
   const allAgents = [...agents.red, ...agents.blue];
   await moveMembersToVC(allAgents, meetingVC);
 }
@@ -110,6 +112,7 @@ client.on("messageCreate", async message => {
 
   try {
     // -----------------------------
+    // 役職設定
     if (command === "//sr") {
       if (gameStarted) return message.reply("⚠️ ゲーム中は役職変更できません");
       const [team, role] = args;
@@ -120,11 +123,44 @@ client.on("messageCreate", async message => {
       return message.reply("✅ 役職設定完了");
     }
 
-    if (command === "//gs") {
+    // -----------------------------
+    // 役職確認
+    if (command === "//cr") {
+      const smRed = spymasters.red ? spymasters.red.user.tag : "未設定";
+      const smBlue = spymasters.blue ? spymasters.blue.user.tag : "未設定";
+      const agRed = agents.red.length ? agents.red.map(m => m.user.tag).join(", ") : "未設定";
+      const agBlue = agents.blue.length ? agents.blue.map(m => m.user.tag).join(", ") : "未設定";
+
+      return message.reply(`
+🎭 現在の役職設定
+スパイマスター赤: ${smRed}
+スパイマスター青: ${smBlue}
+諜報員赤: ${agRed}
+諜報員青: ${agBlue}
+      `);
+    }
+
+    // -----------------------------
+    // ゲーム開始
+    if (command === "/gs") {
       if (gameStarted) return message.reply("⚠️ ゲームは既に開始されています");
       if (!canStartGame()) return message.reply("⚠️ 役職設定が未完了です");
+
+      // 全員をリストアップ
+      const allPlayers = [spymasters.red, spymasters.blue, ...agents.red, ...agents.blue];
+
+      // VC未接続メンバーをチェック
+      const notInVC = allPlayers.filter(member => !member || !member.voice || !member.voice.channel);
+      if (notInVC.length > 0) {
+        return message.reply(`⚠️ 以下のメンバーがVCに接続していません:\n${notInVC.map(m => m.user.tag).join("\n")}`);
+      }
+
       gameStarted = true;
 
+      // 会議VCに全員を集める
+      await moveMembersToVC(allPlayers, meetingVC);
+
+      // 音声モニタリング開始
       monitoringConn = joinVoiceChannel({
         channelId: waitingVC.id,
         guildId: guild.id,
@@ -139,19 +175,24 @@ client.on("messageCreate", async message => {
       });
 
       await startSpymasterTurn(meetingVC);
+
       monitorAndMix(meetingVC, monitoringConn);
 
-      return message.reply("🎮 ゲーム開始！スパイマスターターンです");
+      return message.reply("🎮 ゲーム開始！スパイマスターターンです（全員会議VCに集めました）");
     }
 
+    // -----------------------------
+    // ターン切替
     if (command === "//t") {
       if (!gameStarted) return message.reply("⚠️ ゲーム未開始");
       const arg = args[0];
       if (arg === "sm") await startSpymasterTurn(meetingVC);
       else if (arg === "ag") await startAgentTurn(waitingVC, meetingVC);
-      return message.reply(`ターン切替: ${arg}`);
+      return message.reply(`🔄 ターン切替: ${arg}`);
     }
 
+    // -----------------------------
+    // ゲーム終了
     if (command === "//ge") {
       if (!gameStarted) return message.reply("⚠️ ゲームは未開始です");
       gameStarted = false;
@@ -163,23 +204,6 @@ client.on("messageCreate", async message => {
       agents = { red: [], blue: [] };
 
       return message.reply("🛑 ゲーム終了！役職リセット");
-    }
-
-    // -----------------------------
-    // 役職確認コマンド
-    if (command === "//cr") {
-      const smRed = spymasters.red ? spymasters.red.user.tag : "未設定";
-      const smBlue = spymasters.blue ? spymasters.blue.user.tag : "未設定";
-      const agRed = agents.red.length ? agents.red.map(m => m.user.tag).join(", ") : "未設定";
-      const agBlue = agents.blue.length ? agents.blue.map(m => m.user.tag).join(", ") : "未設定";
-
-      return message.reply(`
-      🎭 現在の役職設定
-      スパイマスター赤: ${smRed}
-      スパイマスター青: ${smBlue}
-      諜報員赤: ${agRed}
-      諜報員青: ${agBlue}
-      `);
     }
 
   } catch (err) { console.error(err); }
