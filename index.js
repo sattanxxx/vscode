@@ -1,5 +1,5 @@
 const { Client, GatewayIntentBits } = require("discord.js");
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, VoiceConnectionStatus, entersState } = require("@discordjs/voice");
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, VoiceConnectionStatus } = require("@discordjs/voice");
 const prism = require("prism-media");
 const { PassThrough } = require("stream");
 const http = require("http");
@@ -68,16 +68,13 @@ function canStartGame() {
 // -----------------------------
 // ターン切替
 async function startSpymasterTurn(meetingVC) {
-  // ゲーム開始時と同じ動作：全員会議VCに集める
-  const allPlayers = [spymasters.red, spymasters.blue, ...agents.red, ...agents.blue];
+  const allPlayers = [spymasters.red, spymasters.blue, ...agents.red, ...agents.blue].filter(Boolean);
   await moveMembersToVC(allPlayers, meetingVC);
 }
 
 async function startAgentTurn(waitingVC, meetingVC) {
-  // スパイマスターを待機VCに移動
-  await moveMembersToVC([spymasters.red, spymasters.blue], waitingVC);
-  // 諜報員だけ会議VCに集める
-  const allAgents = [...agents.red, ...agents.blue];
+  await moveMembersToVC([spymasters.red, spymasters.blue].filter(Boolean), waitingVC);
+  const allAgents = [...agents.red, ...agents.blue].filter(Boolean);
   await moveMembersToVC(allAgents, meetingVC);
 }
 
@@ -88,7 +85,6 @@ function monitorAndMix(meetingVC, waitingConn) {
   if (!members.length) return;
 
   const mixedStream = mixAudioStreams(members, waitingConn.receiver);
-
   const player = createAudioPlayer();
   const resource = createAudioResource(mixedStream);
   player.on("error", err => console.error(`AudioPlayer error: ${err.message}`));
@@ -146,36 +142,24 @@ client.on("messageCreate", async message => {
       if (gameStarted) return message.reply("⚠️ ゲームは既に開始されています");
       if (!canStartGame()) return message.reply("⚠️ 役職設定が未完了です");
 
-      // 全員をリストアップ
+      // 全員VC接続チェック
       const allPlayers = [spymasters.red, spymasters.blue, ...agents.red, ...agents.blue];
-
-      // VC未接続メンバーをチェック
-      const notInVC = allPlayers.filter(member => !member || !member.voice || !member.voice.channel);
+      const notInVC = allPlayers.filter(m => !m || !m.voice || !m.voice.channel);
       if (notInVC.length > 0) {
-        return message.reply(`⚠️ 以下のメンバーがVCに接続していません:\n${notInVC.map(m => m.user.tag).join("\n")}`);
+        return message.reply(`⚠️ 以下のメンバーがVCに接続していません:\n${notInVC.map(m => m ? m.user.tag : "<未設定>").join("\n")}`);
       }
 
       gameStarted = true;
 
       // 会議VCに全員を集める
-      await moveMembersToVC(allPlayers, meetingVC);
+      await moveMembersToVC(allPlayers.filter(Boolean), meetingVC);
 
-      // 音声モニタリング開始
+      // 音声モニタリング開始（待機VCで）
       monitoringConn = joinVoiceChannel({
         channelId: waitingVC.id,
         guildId: guild.id,
         adapterCreator: guild.voiceAdapterCreator
       });
-
-      monitoringConn.on("error", console.error);
-      monitoringConn.on(VoiceConnectionStatus.Disconnected, async () => {
-        console.log("⚠️ 待機VC接続切断。再接続を試みます...");
-        try { await entersState(monitoringConn, VoiceConnectionStatus.Ready, 5000); }
-        catch { monitoringConn.rejoin(); }
-      });
-
-      await startSpymasterTurn(meetingVC);
-
       monitorAndMix(meetingVC, monitoringConn);
 
       return message.reply("🎮 ゲーム開始！スパイマスターターンです（全員会議VCに集めました）");
