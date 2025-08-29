@@ -61,8 +61,7 @@ async function moveMembersToVC(members, vc) {
 // -----------------------------
 // ゲーム開始条件
 function canStartGame() {
-  //return spymasters.red && spymasters.blue && agents.red.length > 0 && agents.blue.length > 0;
-  return true;
+  return spymasters.red && spymasters.blue && agents.red.length > 0 && agents.blue.length > 0;
 }
 
 // -----------------------------
@@ -144,10 +143,10 @@ client.on("messageCreate", async message => {
 
       // 全員VC接続チェック
       const allPlayers = [spymasters.red, spymasters.blue, ...agents.red, ...agents.blue];
-      // const notInVC = allPlayers.filter(m => !m || !m.voice || !m.voice.channel);
-      // if (notInVC.length > 0) {
-      //   return message.reply(`⚠️ 以下のメンバーがVCに接続していません:\n${notInVC.map(m => m ? m.user.tag : "<未設定>").join("\n")}`);
-      // }
+      const notInVC = allPlayers.filter(m => !m || !m.voice || !m.voice.channel);
+      if (notInVC.length > 0) {
+        return message.reply(`⚠️ 以下のメンバーがVCに接続していません:\n${notInVC.map(m => m ? m.user.tag : "<未設定>").join("\n")}`);
+      }
 
       gameStarted = true;
 
@@ -180,6 +179,10 @@ client.on("messageCreate", async message => {
     if (command === "//ge") {
       if (!gameStarted) return message.reply("⚠️ ゲームは未開始です");
       gameStarted = false;
+
+      const allPlayers = [spymasters.red, spymasters.blue, ...agents.red, ...agents.blue];
+      // 会議VCに全員を集める
+      await moveMembersToVC(allPlayers.filter(Boolean), meetingVC);
 
       if (monitoringConn && monitoringConn.state.status !== "destroyed") monitoringConn.destroy();
       monitoringConn = null;
