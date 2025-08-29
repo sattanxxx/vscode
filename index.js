@@ -35,8 +35,14 @@ client.once("ready", () => {
 // 音声転送の安全関数
 async function safeAudioBridge(sourceMembers, receiverConn, targetConn, label) {
   if (!sourceMembers || !receiverConn || !targetConn) return;
-  for (const member of sourceMembers) {
+
+  // 🔹 Collection の場合は values() を利用
+  const members = sourceMembers.values ? sourceMembers.values() : sourceMembers;
+
+  for (const member of members) {
+    if (!member || !member.user) continue; // null安全
     if (member.user.bot) continue;
+
     try {
       const audioStream = receiverConn.receiver.subscribe(member.id, {
         end: { behavior: EndBehaviorType.AfterSilence, duration: 100 }
@@ -55,10 +61,11 @@ async function safeAudioBridge(sourceMembers, receiverConn, targetConn, label) {
 
       console.log(`🎤 ${label}: ${member.user.tag} の音声を転送`);
     } catch (err) {
-      console.error(`⚠️ ${label} 音声転送エラー (${member.user.tag}):`, err);
+      console.error(`⚠️ ${label} 音声転送エラー (${member?.user?.tag || "不明"}) :`, err);
     }
   }
 }
+
 
 client.on("messageCreate", async (message) => {
   if (!message.content.startsWith("/")) return;
