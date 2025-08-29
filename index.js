@@ -109,7 +109,7 @@ client.on("messageCreate", async message => {
 
   try {
     // -----------------------------
-    if (command === "/sr") {
+    if (command === "-sr") {
       if (gameStarted) return message.reply("⚠️ ゲーム中は役職変更できません");
       const [team, role] = args;
       const member = message.mentions.members.first();
@@ -119,7 +119,7 @@ client.on("messageCreate", async message => {
       return message.reply("✅ 役職設定完了");
     }
 
-    if (command === "/gs") {
+    if (command === "-gs") {
       if (gameStarted) return message.reply("⚠️ ゲームは既に開始されています");
       if (!canStartGame()) return message.reply("⚠️ 役職設定が未完了です");
       gameStarted = true;
@@ -143,7 +143,7 @@ client.on("messageCreate", async message => {
       return message.reply("🎮 ゲーム開始！スパイマスターターンです");
     }
 
-    if (command === "/t") {
+    if (command === "-t") {
       if (!gameStarted) return message.reply("⚠️ ゲーム未開始");
       const arg = args[0];
       if (arg === "sm") await startSpymasterTurn(meetingVC);
@@ -151,7 +151,7 @@ client.on("messageCreate", async message => {
       return message.reply(`ターン切替: ${arg}`);
     }
 
-    if (command === "/ge") {
+    if (command === "-ge") {
       if (!gameStarted) return message.reply("⚠️ ゲームは未開始です");
       gameStarted = false;
 
