@@ -1,23 +1,19 @@
 const { Client, GatewayIntentBits } = require("discord.js");
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, EndBehaviorType, VoiceConnectionStatus } = require("@discordjs/voice");
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, VoiceConnectionStatus, entersState } = require("@discordjs/voice");
 const prism = require("prism-media");
-const { Readable } = require("stream");
+const { PassThrough } = require("stream");
 const http = require("http");
 
-// -----------------------------
-// Render 無料プラン向け軽量HTTPサーバー
-// -----------------------------
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200);
   res.end("Bot is running!");
-}).listen(PORT, () => console.log(`🌐 HTTPサーバー起動: ${PORT}`));
+}).listen(PORT, () => console.log(`HTTPサーバー起動: ${PORT}`));
 
-// -----------------------------
 const TOKEN = process.env.TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
-const SPYMASTER_VC_NAME = process.env.SPYMASTER_VC_NAME || "スパイマスターVC";
-const AGENT_VC_NAME = process.env.AGENT_VC_NAME || "諜報員VC";
+const WAITING_VC_NAME = process.env.WAITING_VC_NAME || "待機用VC";
+const MEETING_VC_NAME = process.env.MEETING_VC_NAME || "会議用VC";
 
 const client = new Client({
   intents: [
@@ -28,182 +24,147 @@ const client = new Client({
   ]
 });
 
-// -----------------------------
-let spymasterConn = null;
-let agentConn = null;
 let gameStarted = false;
+let spymasters = { red: null, blue: null };
+let agents = { red: [], blue: [] };
+let monitoringConn = null;
 
 // -----------------------------
-// 複数ユーザー同時発話ミキシング
-// -----------------------------
-function mixPCMStreams(streams) {
-  const output = new Readable({ read() {} });
-  const buffers = streams.map(() => Buffer.alloc(0));
+// 複数ユーザー音声をミキシング
+function mixAudioStreams(members, receiver) {
+  const mixedStream = new PassThrough();
 
-  streams.forEach((stream, index) => {
-    stream.on("data", (chunk) => {
-      buffers[index] = Buffer.concat([buffers[index], chunk]);
-      const minLength = Math.min(...buffers.map(b => b.length));
-      if (minLength > 0) {
-        const mixed = Buffer.alloc(minLength);
-        for (let i = 0; i < minLength; i += 2) {
-          let sum = 0;
-          for (const buf of buffers) sum += buf.readInt16LE(i);
-          if (sum > 32767) sum = 32767;
-          if (sum < -32768) sum = -32768;
-          mixed.writeInt16LE(sum, i);
-        }
-        output.push(mixed);
-        for (let i = 0; i < buffers.length; i++) buffers[i] = buffers[i].slice(minLength);
-      }
-    });
-    stream.on("end", () => output.push(null));
+  members.forEach(member => {
+    if (!member || !member.voice.channel || member.user.bot) return;
+    try {
+      const opusStream = receiver.subscribe(member.id, { end: { behavior: 0 } });
+      const decoder = new prism.opus.Decoder({ frameSize: 960, channels: 2, rate: 48000 });
+      opusStream.pipe(decoder).pipe(mixedStream, { end: false });
+    } catch (err) {
+      console.error(`⚠️ 音声取得エラー (${member.user.tag}): ${err.message}`);
+    }
   });
 
-  return output;
+  return mixedStream;
 }
 
 // -----------------------------
-// VC間音声転送
-// -----------------------------
-function bridgeMultipleUsers(sourceConn, targetConn, members, label) {
-  if (!sourceConn || !targetConn) return;
-  const pcmStreams = [];
-  for (const member of members.values()) {
-    if (!member || !member.user || member.user.bot) continue;
-
-    const opusStream = sourceConn.receiver.subscribe(member.id, {
-      end: { behavior: EndBehaviorType.AfterSilence, duration: 100 }
-    });
-
-    const decoder = new prism.opus.Decoder({ frameSize: 960, channels: 2, rate: 48000 });
-    pcmStreams.push(opusStream.pipe(decoder));
+// VC移動関数
+async function moveMembersToVC(members, vc) {
+  for (const member of members) {
+    if (!member || !member.voice) continue;
+    if (member.voice.channelId !== vc.id) {
+      try { await member.voice.setChannel(vc.id); } 
+      catch { /* 無視 */ }
+    }
   }
-
-  if (pcmStreams.length === 0) return;
-
-  const mixedStream = mixPCMStreams(pcmStreams);
-  const resource = createAudioResource(mixedStream);
-  const player = createAudioPlayer();
-  targetConn.subscribe(player);
-  player.play(resource);
-  console.log(`🎤 ${label}: 複数メンバーの音声をミキシングして転送`);
 }
 
 // -----------------------------
-client.once("ready", () => {
-  console.log(`✅ Bot起動完了: ${client.user.tag}`);
-});
+// ゲーム開始条件
+function canStartGame() {
+  return spymasters.red && spymasters.blue && agents.red.length > 0 && agents.blue.length > 0;
+}
+
+// ターン切替
+async function startSpymasterTurn(meetingVC) {
+  const allPlayers = [spymasters.red, spymasters.blue, ...agents.red, ...agents.blue];
+  await moveMembersToVC(allPlayers, meetingVC);
+}
+
+async function startAgentTurn(waitingVC, meetingVC) {
+  await moveMembersToVC([spymasters.red, spymasters.blue], waitingVC);
+  const allAgents = [...agents.red, ...agents.blue];
+  await moveMembersToVC(allAgents, meetingVC);
+}
 
 // -----------------------------
-client.on("messageCreate", async (message) => {
+// 音声監視とミキシング再生
+function monitorAndMix(meetingVC, waitingConn) {
+  const members = meetingVC.members.filter(m => !m.user.bot);
+  if (!members.length) return;
+
+  const mixedStream = mixAudioStreams(members, waitingConn.receiver);
+
+  const player = createAudioPlayer();
+  const resource = createAudioResource(mixedStream);
+  player.on("error", err => console.error(`AudioPlayer error: ${err.message}`));
+  waitingConn.subscribe(player);
+  player.play(resource);
+}
+
+// -----------------------------
+client.once("ready", () => console.log(`✅ Bot起動完了: ${client.user.tag}`));
+
+client.on("messageCreate", async message => {
   if (!message.content.startsWith("/")) return;
-  const [command, arg] = message.content.split(" ");
+  const [command, ...args] = message.content.split(" ");
   const guild = client.guilds.cache.get(GUILD_ID);
   if (!guild) return;
 
   const channels = await guild.channels.fetch();
-  const spymasterVC = channels.find(c => c.name === SPYMASTER_VC_NAME && c.type === 2);
-  const agentVC = channels.find(c => c.name === AGENT_VC_NAME && c.type === 2);
-
-  if (!spymasterVC || !agentVC) return;
+  const waitingVC = channels.find(c => c.name === WAITING_VC_NAME && c.type === 2);
+  const meetingVC = channels.find(c => c.name === MEETING_VC_NAME && c.type === 2);
+  if (!waitingVC || !meetingVC) return;
 
   try {
     // -----------------------------
-    // /gamestart（常に有効）
-    // -----------------------------
+    if (command === "/setrole") {
+      if (gameStarted) return message.reply("⚠️ ゲーム中は役職変更できません");
+      const [team, role] = args;
+      const member = message.mentions.members.first();
+      if (!member) return message.reply("⚠️ メンバー指定が必要です");
+      if (role === "spymaster") spymasters[team] = member;
+      else if (role === "agent") agents[team].push(member);
+      return message.reply("✅ 役職設定完了");
+    }
+
     if (command === "/gamestart") {
-      if (gameStarted) return message.channel.send("⚠️ 既にゲーム開始済みです。/gameend を実行してください。");
-
-      spymasterConn = joinVoiceChannel({
-        channelId: spymasterVC.id,
-        guildId: guild.id,
-        adapterCreator: guild.voiceAdapterCreator
-      });
-      agentConn = joinVoiceChannel({
-        channelId: agentVC.id,
-        guildId: guild.id,
-        adapterCreator: guild.voiceAdapterCreator
-      });
-
-      // 切断時に二重 destroy されないように制御
-      spymasterConn.on(VoiceConnectionStatus.Disconnected, () => {
-        if (!gameStarted) return;
-        console.log("⚠️ スパイマスターVCから切断されました。再接続を試みます...");
-        spymasterConn.rejoin();
-      });
-
-      agentConn.on(VoiceConnectionStatus.Disconnected, () => {
-        if (!gameStarted) return;
-        console.log("⚠️ 諜報員VCから切断されました。再接続を試みます...");
-        agentConn.rejoin();
-      });
-
+      if (gameStarted) return message.reply("⚠️ ゲームは既に開始されています");
+      if (!canStartGame()) return message.reply("⚠️ 役職設定が未完了です");
       gameStarted = true;
-      message.channel.send("🎮 ゲーム開始！スパイマスターターンです。");
 
-      // 初期ターン：双方向
-      bridgeMultipleUsers(spymasterConn, agentConn, spymasterVC.members, "スパイマスター→諜報員");
-      bridgeMultipleUsers(agentConn, spymasterConn, agentVC.members, "諜報員→スパイマスター");
-      return;
+      monitoringConn = joinVoiceChannel({
+        channelId: waitingVC.id,
+        guildId: guild.id,
+        adapterCreator: guild.voiceAdapterCreator
+      });
+
+      monitoringConn.on("error", console.error);
+      monitoringConn.on(VoiceConnectionStatus.Disconnected, async () => {
+        console.log("⚠️ 待機VC接続切断。再接続を試みます...");
+        try { await entersState(monitoringConn, VoiceConnectionStatus.Ready, 5000); }
+        catch { monitoringConn.rejoin(); }
+      });
+
+      await startSpymasterTurn(meetingVC);
+      monitorAndMix(meetingVC, monitoringConn);
+
+      return message.reply("🎮 ゲーム開始！スパイマスターターンです");
     }
 
-    // -----------------------------
-    // ゲーム開始前は /turn /gameend 無効化
-    // -----------------------------
-    if (!gameStarted) {
-      return message.channel.send("⚠️ まず /gamestart でゲームを開始してください。");
-    }
-
-    // -----------------------------
-    // /turn
-    // -----------------------------
     if (command === "/turn") {
-      if (arg === "spymaster") {
-        message.channel.send("🔵 スパイマスターターン：双方向会話");
-        bridgeMultipleUsers(spymasterConn, agentConn, spymasterVC.members, "スパイマスター→諜報員");
-        bridgeMultipleUsers(agentConn, spymasterConn, agentVC.members, "諜報員→スパイマスター");
-      } else if (arg === "agent") {
-        message.channel.send("🟢 諜報員ターン：スパイマスターはモニタリングのみ");
-        bridgeMultipleUsers(agentConn, spymasterConn, agentVC.members, "諜報員→スパイマスター");
-      }
-      return;
+      if (!gameStarted) return message.reply("⚠️ ゲーム未開始");
+      const arg = args[0];
+      if (arg === "spymaster") await startSpymasterTurn(meetingVC);
+      else if (arg === "agent") await startAgentTurn(waitingVC, meetingVC);
+      return message.reply(`ターン切替: ${arg}`);
     }
 
-    // -----------------------------
-    // /gameend
-    // -----------------------------
     if (command === "/gameend") {
-      if (spymasterConn && spymasterConn.state.status !== "destroyed") {
-        try { spymasterConn.destroy(); } catch(e){ console.error(e); }
-        spymasterConn = null;
-      }
-      if (agentConn && agentConn.state.status !== "destroyed") {
-        try { agentConn.destroy(); } catch(e){ console.error(e); }
-        agentConn = null;
-      }
+      if (!gameStarted) return message.reply("⚠️ ゲームは未開始です");
       gameStarted = false;
-      message.channel.send("🛑 ゲーム終了！VCから退出しました。");
-      return;
+
+      if (monitoringConn && monitoringConn.state.status !== "destroyed") monitoringConn.destroy();
+      monitoringConn = null;
+
+      spymasters = { red: null, blue: null };
+      agents = { red: [], blue: [] };
+
+      return message.reply("🛑 ゲーム終了！役職リセット");
     }
 
-    // -----------------------------
-    // /help
-    // -----------------------------
-    if (command === "/help") {
-      message.channel.send(`
-🎮 Codenamesゲーム操作一覧
-/gamestart → ゲーム開始（スパイマスターターンで開始）
-/turn spymaster → スパイマスターターン
-/turn agent → 諜報員ターン
-/gameend → ゲーム終了
-      `);
-      return;
-    }
-
-  } catch (err) {
-    console.error("⚠️ コマンド処理中のエラー:", err);
-  }
+  } catch (err) { console.error(err); }
 });
 
 client.login(TOKEN);
