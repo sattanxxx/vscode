@@ -143,11 +143,11 @@ client.on("messageCreate", async message => {
       if (!canStartGame()) return message.reply("⚠️ 役職設定が未完了です");
 
       // 全員VC接続チェック
-      const allPlayers = [spymasters.red, spymasters.blue, ...agents.red, ...agents.blue];
-      const notInVC = allPlayers.filter(m => !m || !m.voice || !m.voice.channel);
-      if (notInVC.length > 0) {
-        return message.reply(`⚠️ 以下のメンバーがVCに接続していません:\n${notInVC.map(m => m ? m.user.tag : "<未設定>").join("\n")}`);
-      }
+      // const allPlayers = [spymasters.red, spymasters.blue, ...agents.red, ...agents.blue];
+      // const notInVC = allPlayers.filter(m => !m || !m.voice || !m.voice.channel);
+      // if (notInVC.length > 0) {
+      //   return message.reply(`⚠️ 以下のメンバーがVCに接続していません:\n${notInVC.map(m => m ? m.user.tag : "<未設定>").join("\n")}`);
+      // }
 
       gameStarted = true;
 
