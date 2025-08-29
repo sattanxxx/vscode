@@ -1,8 +1,20 @@
 const { Client, GatewayIntentBits } = require("discord.js");
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, EndBehaviorType } = require("@discordjs/voice");
 const prism = require("prism-media");
+const http = require("http");
 
-// Render環境変数対応
+// -----------------------------
+// ダミー HTTP サーバー（Render Web Service用）
+// -----------------------------
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end("Bot is running!");
+}).listen(PORT, () => console.log(`🌐 HTTPサーバー起動: ${PORT}`));
+
+// -----------------------------
+// Discord Bot 設定
+// -----------------------------
 const TOKEN = process.env.TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
 const SPYMASTER_VC_NAME = process.env.SPYMASTER_VC_NAME || "スパイマスターVC";
@@ -24,6 +36,9 @@ client.once("ready", () => {
   console.log(`✅ Bot起動完了: ${client.user.tag}`);
 });
 
+// -----------------------------
+// コマンド処理
+// -----------------------------
 client.on("messageCreate", async (message) => {
   if (!message.content.startsWith("/")) return;
 
@@ -35,11 +50,10 @@ client.on("messageCreate", async (message) => {
   const agentVC = guild.channels.cache.find(c => c.name === AGENT_VC_NAME);
   if (!spymasterVC || !agentVC) return;
 
-  // ----------------------------
+  // -----------------------------
   // /gamestart コマンド
-  // ----------------------------
+  // -----------------------------
   if (command === "/gamestart") {
-    // VC接続（まだなら）
     if (!spymasterConn) {
       spymasterConn = joinVoiceChannel({
         channelId: spymasterVC.id,
@@ -59,18 +73,19 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  // ----------------------------
+  // -----------------------------
   // /turn コマンド
-  // ----------------------------
+  // -----------------------------
   if (command === "/turn") {
     if (arg === "spymaster") {
       bridgeActive = false;
       message.channel.send("🔵 スパイマスターターン：双方向会話OK");
+
     } else if (arg === "agent") {
       bridgeActive = true;
       message.channel.send("🟢 諜報員ターン：スパイマスターに諜報員の声をブリッジ");
 
-      // Agent VC の音声をリッスンして Spymaster VC に転送
+      // Agent VC の音声を Spymaster VC に転送
       const receiver = agentConn.receiver;
 
       agentVC.members.forEach(member => {
