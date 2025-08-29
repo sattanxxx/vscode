@@ -1,13 +1,8 @@
 const { Client, GatewayIntentBits } = require("discord.js");
-const {
-  joinVoiceChannel,
-  createAudioPlayer,
-  createAudioResource,
-  EndBehaviorType,
-} = require("@discordjs/voice");
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, EndBehaviorType } = require("@discordjs/voice");
 const prism = require("prism-media");
 
-// 環境変数から読み込み（RenderのDashboardで設定する）
+// Render環境変数対応
 const TOKEN = process.env.TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
 const SPYMASTER_VC_NAME = process.env.SPYMASTER_VC_NAME || "スパイマスターVC";
@@ -17,14 +12,14 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildVoiceStates,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-  ],
+    GatewayIntentBits.GuildMessages
+    // VC操作のみなら MessageContent は不要
+  ]
 });
 
-let bridgeActive = false;
 let spymasterConn = null;
 let agentConn = null;
+let bridgeActive = false;
 
 client.once("ready", () => {
   console.log(`✅ Bot起動完了: ${client.user.tag}`);
@@ -32,68 +27,60 @@ client.once("ready", () => {
 
 client.on("messageCreate", async (message) => {
   if (!message.content.startsWith("/turn")) return;
+
   const phase = message.content.split(" ")[1];
-
   const guild = client.guilds.cache.get(GUILD_ID);
-  if (!guild) {
-    message.channel.send("❌ サーバーが見つかりません。環境変数 GUILD_ID を確認してください。");
-    return;
-  }
+  if (!guild) return;
 
-  const spymasterVC = guild.channels.cache.find((c) => c.name === SPYMASTER_VC_NAME);
-  const agentVC = guild.channels.cache.find((c) => c.name === AGENT_VC_NAME);
+  const spymasterVC = guild.channels.cache.find(c => c.name === SPYMASTER_VC_NAME);
+  const agentVC = guild.channels.cache.find(c => c.name === AGENT_VC_NAME);
+  if (!spymasterVC || !agentVC) return;
 
-  if (!spymasterVC || !agentVC) {
-    message.channel.send(`❌ VCが見つかりません。(${SPYMASTER_VC_NAME}, ${AGENT_VC_NAME})`);
-    return;
-  }
-
-  // VC接続（まだなら）
+  // VCへBot参加（まだなら）
   if (!spymasterConn) {
     spymasterConn = joinVoiceChannel({
       channelId: spymasterVC.id,
       guildId: guild.id,
-      adapterCreator: guild.voiceAdapterCreator,
+      adapterCreator: guild.voiceAdapterCreator
     });
   }
   if (!agentConn) {
     agentConn = joinVoiceChannel({
       channelId: agentVC.id,
       guildId: guild.id,
-      adapterCreator: guild.voiceAdapterCreator,
+      adapterCreator: guild.voiceAdapterCreator
     });
   }
 
   if (phase === "spymaster") {
     bridgeActive = false;
-    message.channel.send("🔵 スパイマスターターン（双方向会話OK）");
-  }
+    message.channel.send("🔵 スパイマスターターン：双方向会話OK");
 
-  if (phase === "agent") {
+  } else if (phase === "agent") {
     bridgeActive = true;
-    message.channel.send("🟢 諜報員ターン（スパイマスターに諜報員の声をブリッジ）");
+    message.channel.send("🟢 諜報員ターン：スパイマスターに諜報員の声をブリッジ");
 
-    // Agent VC の音声をリッスンして Spymaster VC に流す
+    // Agent VC の音声をリッスンして Spymaster VC に転送
     const receiver = agentConn.receiver;
 
-    agentVC.members.forEach((member) => {
+    agentVC.members.forEach(member => {
       if (member.user.bot) return;
 
       const audioStream = receiver.subscribe(member.id, {
         end: {
           behavior: EndBehaviorType.AfterSilence,
-          duration: 100,
-        },
+          duration: 100
+        }
       });
 
       const opusDecoder = new prism.opus.Decoder({
         frameSize: 960,
         channels: 2,
-        rate: 48000,
+        rate: 48000
       });
 
-      const resource = createAudioResource(audioStream.pipe(opusDecoder));
       const player = createAudioPlayer();
+      const resource = createAudioResource(audioStream.pipe(opusDecoder));
       spymasterConn.subscribe(player);
       player.play(resource);
     });
