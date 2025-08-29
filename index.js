@@ -142,7 +142,7 @@ client.on("messageCreate", async message => {
 
     // -----------------------------
     // ゲーム開始
-    if (command === "/gs") {
+    if (command === "//gs") {
       if (gameStarted) return message.reply("⚠️ ゲームは既に開始されています");
       if (!canStartGame()) return message.reply("⚠️ 役職設定が未完了です");
 
