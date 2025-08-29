@@ -13,7 +13,6 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.GuildMessages
-    // VC操作のみなら MessageContent は不要
   ]
 });
 
@@ -26,9 +25,9 @@ client.once("ready", () => {
 });
 
 client.on("messageCreate", async (message) => {
-  if (!message.content.startsWith("/turn")) return;
+  if (!message.content.startsWith("/")) return;
 
-  const phase = message.content.split(" ")[1];
+  const [command, arg] = message.content.split(" ");
   const guild = client.guilds.cache.get(GUILD_ID);
   if (!guild) return;
 
@@ -36,54 +35,66 @@ client.on("messageCreate", async (message) => {
   const agentVC = guild.channels.cache.find(c => c.name === AGENT_VC_NAME);
   if (!spymasterVC || !agentVC) return;
 
-  // VCへBot参加（まだなら）
-  if (!spymasterConn) {
-    spymasterConn = joinVoiceChannel({
-      channelId: spymasterVC.id,
-      guildId: guild.id,
-      adapterCreator: guild.voiceAdapterCreator
-    });
-  }
-  if (!agentConn) {
-    agentConn = joinVoiceChannel({
-      channelId: agentVC.id,
-      guildId: guild.id,
-      adapterCreator: guild.voiceAdapterCreator
-    });
-  }
-
-  if (phase === "spymaster") {
-    bridgeActive = false;
-    message.channel.send("🔵 スパイマスターターン：双方向会話OK");
-
-  } else if (phase === "agent") {
-    bridgeActive = true;
-    message.channel.send("🟢 諜報員ターン：スパイマスターに諜報員の声をブリッジ");
-
-    // Agent VC の音声をリッスンして Spymaster VC に転送
-    const receiver = agentConn.receiver;
-
-    agentVC.members.forEach(member => {
-      if (member.user.bot) return;
-
-      const audioStream = receiver.subscribe(member.id, {
-        end: {
-          behavior: EndBehaviorType.AfterSilence,
-          duration: 100
-        }
+  // ----------------------------
+  // /gamestart コマンド
+  // ----------------------------
+  if (command === "/gamestart") {
+    // VC接続（まだなら）
+    if (!spymasterConn) {
+      spymasterConn = joinVoiceChannel({
+        channelId: spymasterVC.id,
+        guildId: guild.id,
+        adapterCreator: guild.voiceAdapterCreator
       });
-
-      const opusDecoder = new prism.opus.Decoder({
-        frameSize: 960,
-        channels: 2,
-        rate: 48000
+    }
+    if (!agentConn) {
+      agentConn = joinVoiceChannel({
+        channelId: agentVC.id,
+        guildId: guild.id,
+        adapterCreator: guild.voiceAdapterCreator
       });
+    }
 
-      const player = createAudioPlayer();
-      const resource = createAudioResource(audioStream.pipe(opusDecoder));
-      spymasterConn.subscribe(player);
-      player.play(resource);
-    });
+    message.channel.send("🎮 ゲーム開始！Botが両方のVCに参加しました。");
+    return;
+  }
+
+  // ----------------------------
+  // /turn コマンド
+  // ----------------------------
+  if (command === "/turn") {
+    if (arg === "spymaster") {
+      bridgeActive = false;
+      message.channel.send("🔵 スパイマスターターン：双方向会話OK");
+    } else if (arg === "agent") {
+      bridgeActive = true;
+      message.channel.send("🟢 諜報員ターン：スパイマスターに諜報員の声をブリッジ");
+
+      // Agent VC の音声をリッスンして Spymaster VC に転送
+      const receiver = agentConn.receiver;
+
+      agentVC.members.forEach(member => {
+        if (member.user.bot) return;
+
+        const audioStream = receiver.subscribe(member.id, {
+          end: {
+            behavior: EndBehaviorType.AfterSilence,
+            duration: 100
+          }
+        });
+
+        const opusDecoder = new prism.opus.Decoder({
+          frameSize: 960,
+          channels: 2,
+          rate: 48000
+        });
+
+        const player = createAudioPlayer();
+        const resource = createAudioResource(audioStream.pipe(opusDecoder));
+        spymasterConn.subscribe(player);
+        player.play(resource);
+      });
+    }
   }
 });
 
