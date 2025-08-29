@@ -97,7 +97,7 @@ function monitorAndMix(meetingVC, waitingConn) {
 client.once("ready", () => console.log(`✅ Bot起動完了: ${client.user.tag}`));
 
 client.on("messageCreate", async message => {
-  if (!message.content.startsWith("/")) return;
+  if (!message.content.startsWith("//")) return;
   const [command, ...args] = message.content.split(" ");
   const guild = client.guilds.cache.get(GUILD_ID);
   if (!guild) return;
@@ -109,7 +109,7 @@ client.on("messageCreate", async message => {
 
   try {
     // -----------------------------
-    if (command === "-sr") {
+    if (command === "//sr") {
       if (gameStarted) return message.reply("⚠️ ゲーム中は役職変更できません");
       const [team, role] = args;
       const member = message.mentions.members.first();
@@ -119,7 +119,7 @@ client.on("messageCreate", async message => {
       return message.reply("✅ 役職設定完了");
     }
 
-    if (command === "-gs") {
+    if (command === "//gs") {
       if (gameStarted) return message.reply("⚠️ ゲームは既に開始されています");
       if (!canStartGame()) return message.reply("⚠️ 役職設定が未完了です");
       gameStarted = true;
@@ -143,7 +143,7 @@ client.on("messageCreate", async message => {
       return message.reply("🎮 ゲーム開始！スパイマスターターンです");
     }
 
-    if (command === "-t") {
+    if (command === "//t") {
       if (!gameStarted) return message.reply("⚠️ ゲーム未開始");
       const arg = args[0];
       if (arg === "sm") await startSpymasterTurn(meetingVC);
@@ -151,7 +151,7 @@ client.on("messageCreate", async message => {
       return message.reply(`ターン切替: ${arg}`);
     }
 
-    if (command === "-ge") {
+    if (command === "//ge") {
       if (!gameStarted) return message.reply("⚠️ ゲームは未開始です");
       gameStarted = false;
 
@@ -166,7 +166,7 @@ client.on("messageCreate", async message => {
 
     // -----------------------------
     // 役職確認コマンド
-    if (command === "/cr") {
+    if (command === "//cr") {
       const smRed = spymasters.red ? spymasters.red.user.tag : "未設定";
       const smBlue = spymasters.blue ? spymasters.blue.user.tag : "未設定";
       const agRed = agents.red.length ? agents.red.map(m => m.user.tag).join(", ") : "未設定";
