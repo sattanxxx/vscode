@@ -61,7 +61,8 @@ async function moveMembersToVC(members, vc) {
 // -----------------------------
 // ゲーム開始条件
 function canStartGame() {
-  return spymasters.red && spymasters.blue && agents.red.length > 0 && agents.blue.length > 0;
+  //return spymasters.red && spymasters.blue && agents.red.length > 0 && agents.blue.length > 0;
+  return true;
 }
 
 // -----------------------------
