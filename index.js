@@ -45,7 +45,8 @@ async function moveMembersToVC(members, vc) {
 // -----------------------------
 // ゲーム開始条件
 function canStartGame() {
-  return spymasters.red && spymasters.blue && players.length > 0;
+  //return spymasters.red && spymasters.blue && players.length > 0;
+  return true;
 }
 
 // -----------------------------
@@ -145,10 +146,10 @@ client.on("messageCreate", async message => {
       if (!canStartGame()) return message.reply("⚠️ 役職設定が未完了です");
 
       const allPlayers = [spymasters.red, spymasters.blue, ...players];
-      const notInVC = allPlayers.filter(m => !m.voice || !m.voice.channel);
-      if (notInVC.length > 0) {
-        return message.reply(`⚠️ 以下のメンバーがVCに接続していません:\n${notInVC.map(m => m.user.tag).join("\n")}`);
-      }
+      // const notInVC = allPlayers.filter(m => !m.voice || !m.voice.channel);
+      // if (notInVC.length > 0) {
+      //   return message.reply(`⚠️ 以下のメンバーがVCに接続していません:\n${notInVC.map(m => m.user.tag).join("\n")}`);
+      // }
 
       gameStarted = true;
       isSpymasterTurn = true;
