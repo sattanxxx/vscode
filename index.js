@@ -1,5 +1,5 @@
 const { Client, GatewayIntentBits } = require("discord.js");
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, VoiceConnectionStatus } = require("@discordjs/voice");
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, VoiceConnectionStatus, entersState } = require("@discordjs/voice");
 const prism = require("prism-media");
 const { PassThrough } = require("stream");
 const http = require("http");
@@ -25,26 +25,10 @@ const client = new Client({
 });
 
 let gameStarted = false;
+let isSpymasterTurn = true;
 let spymasters = { red: null, blue: null };
-let agents = { red: [], blue: [] };
+let players = [];
 let monitoringConn = null;
-
-// -----------------------------
-// 複数ユーザー音声をミキシング
-function mixAudioStreams(members, receiver) {
-  const mixedStream = new PassThrough();
-  members.forEach(member => {
-    if (!member || !member.voice.channel || member.user.bot) return;
-    try {
-      const opusStream = receiver.subscribe(member.id, { end: { behavior: 0 } });
-      const decoder = new prism.opus.Decoder({ frameSize: 960, channels: 2, rate: 48000 });
-      opusStream.pipe(decoder).pipe(mixedStream, { end: false });
-    } catch (err) {
-      console.error(`⚠️ 音声取得エラー (${member.user.tag}): ${err.message}`);
-    }
-  });
-  return mixedStream;
-}
 
 // -----------------------------
 // VC移動関数
@@ -61,30 +45,41 @@ async function moveMembersToVC(members, vc) {
 // -----------------------------
 // ゲーム開始条件
 function canStartGame() {
-  //return spymasters.red && spymasters.blue && agents.red.length > 0 && agents.blue.length > 0;
-  return true;
+  return spymasters.red && spymasters.blue && players.length > 0;
 }
 
 // -----------------------------
 // ターン切替
-async function startSpymasterTurn(meetingVC) {
-  const allPlayers = [spymasters.red, spymasters.blue, ...agents.red, ...agents.blue].filter(Boolean);
-  await moveMembersToVC(allPlayers, meetingVC);
-}
-
-async function startAgentTurn(waitingVC, meetingVC) {
-  await moveMembersToVC([spymasters.red, spymasters.blue].filter(Boolean), waitingVC);
-  const allAgents = [...agents.red, ...agents.blue].filter(Boolean);
-  await moveMembersToVC(allAgents, meetingVC);
+async function toggleTurn(waitingVC, meetingVC) {
+  if (isSpymasterTurn) {
+    // 諜報員ターン
+    await moveMembersToVC([spymasters.red, spymasters.blue].filter(Boolean), waitingVC);
+    await moveMembersToVC(players, meetingVC);
+  } else {
+    // スパイマスターターン
+    await moveMembersToVC([spymasters.red, spymasters.blue, ...players].filter(Boolean), meetingVC);
+  }
+  isSpymasterTurn = !isSpymasterTurn;
 }
 
 // -----------------------------
-// 音声監視とミキシング再生
-function monitorAndMix(meetingVC, waitingConn) {
+// 複数ユーザー音声をモニタリング
+function monitorAndBridge(meetingVC, waitingConn) {
   const members = meetingVC.members.filter(m => !m.user.bot);
   if (!members.length) return;
 
-  const mixedStream = mixAudioStreams(members, waitingConn.receiver);
+  const mixedStream = new PassThrough();
+  members.forEach(member => {
+    if (!member.voice.channel) return;
+    try {
+      const opusStream = waitingConn.receiver.subscribe(member.id, { end: { behavior: 0 } });
+      const decoder = new prism.opus.Decoder({ frameSize: 960, channels: 2, rate: 48000 });
+      opusStream.pipe(decoder).pipe(mixedStream, { end: false });
+    } catch (err) {
+      console.error(`⚠️ 音声取得エラー (${member.user.tag}): ${err.message}`);
+    }
+  });
+
   const player = createAudioPlayer();
   const resource = createAudioResource(mixedStream);
   player.on("error", err => console.error(`AudioPlayer error: ${err.message}`));
@@ -108,15 +103,25 @@ client.on("messageCreate", async message => {
 
   try {
     // -----------------------------
-    // 役職設定
-    if (command === "//sr") {
+    // スパイマスター設定
+    if (command === "//sm") {
       if (gameStarted) return message.reply("⚠️ ゲーム中は役職変更できません");
-      const [team, role] = args;
+      const [team] = args;
       const member = message.mentions.members.first();
       if (!member) return message.reply("⚠️ メンバー指定が必要です");
-      if (role === "sm") spymasters[team] = member;
-      else if (role === "ag") agents[team].push(member);
-      return message.reply("✅ 役職設定完了");
+      if (team !== "red" && team !== "blue") return message.reply("⚠️ teamはredかblueを指定");
+      spymasters[team] = member;
+      return message.reply(`✅ ${team}スパイマスターを設定しました`);
+    }
+
+    // -----------------------------
+    // プレイヤー追加
+    if (command === "//player") {
+      if (gameStarted) return message.reply("⚠️ ゲーム中は変更できません");
+      const member = message.mentions.members.first();
+      if (!member) return message.reply("⚠️ メンバー指定が必要です");
+      if (!players.includes(member)) players.push(member);
+      return message.reply(`✅ プレイヤーに追加しました: ${member.user.tag}`);
     }
 
     // -----------------------------
@@ -124,15 +129,12 @@ client.on("messageCreate", async message => {
     if (command === "//cr") {
       const smRed = spymasters.red ? spymasters.red.user.tag : "未設定";
       const smBlue = spymasters.blue ? spymasters.blue.user.tag : "未設定";
-      const agRed = agents.red.length ? agents.red.map(m => m.user.tag).join(", ") : "未設定";
-      const agBlue = agents.blue.length ? agents.blue.map(m => m.user.tag).join(", ") : "未設定";
-
+      const playerList = players.length ? players.map(m => m.user.tag).join(", ") : "未設定";
       return message.reply(`
-🎭 現在の役職設定
+🎭 役職確認
 スパイマスター赤: ${smRed}
 スパイマスター青: ${smBlue}
-諜報員赤: ${agRed}
-諜報員青: ${agBlue}
+プレイヤー: ${playerList}
       `);
     }
 
@@ -142,14 +144,14 @@ client.on("messageCreate", async message => {
       if (gameStarted) return message.reply("⚠️ ゲームは既に開始されています");
       if (!canStartGame()) return message.reply("⚠️ 役職設定が未完了です");
 
-      // 全員VC接続チェック
-      const allPlayers = [spymasters.red, spymasters.blue, ...agents.red, ...agents.blue];
-      // const notInVC = allPlayers.filter(m => !m || !m.voice || !m.voice.channel);
-      // if (notInVC.length > 0) {
-      //   return message.reply(`⚠️ 以下のメンバーがVCに接続していません:\n${notInVC.map(m => m ? m.user.tag : "<未設定>").join("\n")}`);
-      // }
+      const allPlayers = [spymasters.red, spymasters.blue, ...players];
+      const notInVC = allPlayers.filter(m => !m.voice || !m.voice.channel);
+      if (notInVC.length > 0) {
+        return message.reply(`⚠️ 以下のメンバーがVCに接続していません:\n${notInVC.map(m => m.user.tag).join("\n")}`);
+      }
 
       gameStarted = true;
+      isSpymasterTurn = true;
 
       // 会議VCに全員を集める
       await moveMembersToVC(allPlayers.filter(Boolean), meetingVC);
@@ -160,7 +162,7 @@ client.on("messageCreate", async message => {
         guildId: guild.id,
         adapterCreator: guild.voiceAdapterCreator
       });
-      monitorAndMix(meetingVC, monitoringConn);
+      monitorAndBridge(meetingVC, monitoringConn);
 
       return message.reply("🎮 ゲーム開始！スパイマスターターンです（全員会議VCに集めました）");
     }
@@ -169,10 +171,8 @@ client.on("messageCreate", async message => {
     // ターン切替
     if (command === "//t") {
       if (!gameStarted) return message.reply("⚠️ ゲーム未開始");
-      const arg = args[0];
-      if (arg === "sm") await startSpymasterTurn(meetingVC);
-      else if (arg === "ag") await startAgentTurn(waitingVC, meetingVC);
-      return message.reply(`🔄 ターン切替: ${arg}`);
+      await toggleTurn(waitingVC, meetingVC);
+      return message.reply(`🔄 ターン切替: ${isSpymasterTurn ? "スパイマスター" : "諜報員"}`);
     }
 
     // -----------------------------
@@ -181,20 +181,22 @@ client.on("messageCreate", async message => {
       if (!gameStarted) return message.reply("⚠️ ゲームは未開始です");
       gameStarted = false;
 
-      const allPlayers = [spymasters.red, spymasters.blue, ...agents.red, ...agents.blue];
-      // 会議VCに全員を集める
-      await moveMembersToVC(allPlayers.filter(Boolean), meetingVC);
+      const allPlayers = [spymasters.red, spymasters.blue, ...players].filter(Boolean);
+      await moveMembersToVC(allPlayers, meetingVC);
 
       if (monitoringConn && monitoringConn.state.status !== "destroyed") monitoringConn.destroy();
       monitoringConn = null;
 
       spymasters = { red: null, blue: null };
-      agents = { red: [], blue: [] };
+      players = [];
+      isSpymasterTurn = true;
 
       return message.reply("🛑 ゲーム終了！役職リセット");
     }
 
-  } catch (err) { console.error(err); }
+  } catch (err) {
+    console.error(err);
+  }
 });
 
 client.login(TOKEN);
